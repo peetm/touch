@@ -1,0 +1,371 @@
+/*
+ * touch.cpp - Windows implementation of UNIX touch utility
+ * 
+ * Usage:
+ *   touch [filespec]        - Touch files matching filespec in current directory
+ *   touch -r [filespec]     - Recursively touch files matching filespec
+ *   touch -v [filespec]     - Verbose mode (show old/new timestamps)
+ *   touch -f [filespec]     - Touch folders as well as files
+ *   touch -r -v [filespec]  - Recursive and verbose
+ *   touch -r -f [filespec]  - Recursive, touching files and folders
+ *   touch                   - Touch all files in current directory
+ *
+ * Sets LastAccessed, DateModified, and Created timestamps to current time
+ */
+
+#include <windows.h>
+#include <stdio.h>
+#include <string.h>
+
+/*
+ * Function prototypes
+ */
+void TouchFile(const char * filename, BOOL verbose, const FILETIME * newTime) ;
+void TouchFolder(const char * foldername, BOOL verbose, const FILETIME * newTime) ;
+void ProcessDirectory(const char * filespec, BOOL recurse, BOOL verbose, BOOL touchFolders) ;
+void ProcessFilesInDirectory(const char * path, const char * pattern, BOOL recurse, BOOL verbose, BOOL touchFolders) ;
+void FormatFileTime(const FILETIME * ft, char * buffer, int bufferSize) ;
+void ShowUsage() ;
+
+int main(int argc, char * argv[])
+{
+    BOOL recurse = FALSE ;
+    BOOL verbose = FALSE ;
+    BOOL touchFolders = FALSE ;
+    const char * filespec = "*" ;
+    
+    /*
+     * Show usage if no arguments provided
+     */
+    if (argc == 1)
+    {
+        ShowUsage() ;
+        return 0 ;
+    }
+    
+    /*
+     * Parse command line arguments
+     */
+    if (argc > 1)
+    {
+        int argIndex = 1 ;
+        
+        /*
+         * Check for flags
+         */
+        while (argIndex < argc && (argv[argIndex][0] == '-' || argv[argIndex][0] == '/'))
+        {
+            if (strcmp(argv[argIndex], "-r") == 0 || strcmp(argv[argIndex], "/r") == 0)
+            {
+                recurse = TRUE ;
+                argIndex++ ;
+            }
+            else if (strcmp(argv[argIndex], "-v") == 0 || strcmp(argv[argIndex], "/v") == 0)
+            {
+                verbose = TRUE ;
+                argIndex++ ;
+            }
+            else if (strcmp(argv[argIndex], "-f") == 0 || strcmp(argv[argIndex], "/f") == 0)
+            {
+                touchFolders = TRUE ;
+                argIndex++ ;
+            }
+            else
+            {
+                printf("Unknown flag: %s\n", argv[argIndex]) ;
+                ShowUsage() ;
+                return 1 ;
+            }
+        }
+        
+        /*
+         * Get filespec if provided
+         */
+        if (argIndex < argc)
+        {
+            filespec = argv[argIndex] ;
+        }
+    }
+    
+    /*
+     * Process the directory
+     */
+    ProcessDirectory(filespec, recurse, verbose, touchFolders) ;
+    
+    return 0 ;
+}
+
+/*
+ * TouchFile - Set all timestamps on a file to current time
+ */
+void TouchFile(const char * filename, BOOL verbose, const FILETIME * newTime)
+{
+    HANDLE hFile ;
+    FILETIME oldCreateTime, oldAccessTime, oldWriteTime ;
+    char oldTimeStr[64] ;
+    char newTimeStr[64] ;
+    
+    /*
+     * Open the file to read current timestamps first
+     */
+    if (verbose)
+    {
+        hFile = CreateFile(filename, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL) ;
+        
+        if (hFile != INVALID_HANDLE_VALUE)
+        {
+            GetFileTime(hFile, &oldCreateTime, &oldAccessTime, &oldWriteTime) ;
+            CloseHandle(hFile) ;
+            
+            /*
+             * Format old modified time (most meaningful timestamp)
+             */
+            FormatFileTime(&oldWriteTime, oldTimeStr, sizeof(oldTimeStr)) ;
+        }
+        else
+        {
+            strcpy_s(oldTimeStr, sizeof(oldTimeStr), "Unknown") ;
+        }
+    }
+    
+    /*
+     * Open the file with write attributes access
+     */
+    hFile = CreateFile(filename, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL) ;
+    
+    if (hFile == INVALID_HANDLE_VALUE)
+    {
+        printf("Error: Cannot touch '%s' - %d\n", filename, GetLastError()) ;
+        return ;
+    }
+    
+    /*
+     * Set creation time, last access time, and last write time
+     */
+    if (!SetFileTime(hFile, newTime, newTime, newTime))
+    {
+        printf("Error: Failed to set time on '%s' - %d\n", filename, GetLastError()) ;
+    }
+    else
+    {
+        if (verbose)
+        {
+            FormatFileTime(newTime, newTimeStr, sizeof(newTimeStr)) ;
+            printf("%s: %s -> %s\n", filename, oldTimeStr, newTimeStr) ;
+        }
+        else
+        {
+            printf("Touched: %s\n", filename) ;
+        }
+    }
+    
+    CloseHandle(hFile) ;
+}
+
+/*
+ * TouchFolder - Set all timestamps on a folder to current time
+ */
+void TouchFolder(const char * foldername, BOOL verbose, const FILETIME * newTime)
+{
+    HANDLE hDir ;
+    FILETIME oldCreateTime, oldAccessTime, oldWriteTime ;
+    char oldTimeStr[64] ;
+    char newTimeStr[64] ;
+    
+    /*
+     * Open the directory to read current timestamps first
+     */
+    if (verbose)
+    {
+        hDir = CreateFile(foldername, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL) ;
+        
+        if (hDir != INVALID_HANDLE_VALUE)
+        {
+            GetFileTime(hDir, &oldCreateTime, &oldAccessTime, &oldWriteTime) ;
+            CloseHandle(hDir) ;
+            
+            /*
+             * Format old modified time (most meaningful timestamp)
+             */
+            FormatFileTime(&oldWriteTime, oldTimeStr, sizeof(oldTimeStr)) ;
+        }
+        else
+        {
+            strcpy_s(oldTimeStr, sizeof(oldTimeStr), "Unknown") ;
+        }
+    }
+    
+    /*
+     * Open the directory with write attributes access
+     */
+    hDir = CreateFile(foldername, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL) ;
+    
+    if (hDir == INVALID_HANDLE_VALUE)
+    {
+        printf("Error: Cannot touch folder '%s' - %d\n", foldername, GetLastError()) ;
+        return ;
+    }
+    
+    /*
+     * Set creation time, last access time, and last write time
+     */
+    if (!SetFileTime(hDir, newTime, newTime, newTime))
+    {
+        printf("Error: Failed to set time on folder '%s' - %d\n", foldername, GetLastError()) ;
+    }
+    else
+    {
+        if (verbose)
+        {
+            FormatFileTime(newTime, newTimeStr, sizeof(newTimeStr)) ;
+            printf("%s [DIR]: %s -> %s\n", foldername, oldTimeStr, newTimeStr) ;
+        }
+        else
+        {
+            printf("Touched folder: %s\n", foldername) ;
+        }
+    }
+    
+    CloseHandle(hDir) ;
+}
+
+/*
+ * ProcessDirectory - Process files in directory (and subdirectories if recurse=TRUE)
+ */
+void ProcessDirectory(const char * filespec, BOOL recurse, BOOL verbose, BOOL touchFolders)
+{
+    char currentDir[MAX_PATH] ;
+    
+    /*
+     * Get current directory
+     */
+    GetCurrentDirectory(MAX_PATH, currentDir) ;
+    
+    /*
+     * Process files in current directory
+     */
+    ProcessFilesInDirectory(currentDir, filespec, recurse, verbose, touchFolders) ;
+}
+
+/*
+ * ProcessFilesInDirectory - Process files matching pattern in specified directory
+ */
+void ProcessFilesInDirectory(const char * path, const char * pattern, BOOL recurse, BOOL verbose, BOOL touchFolders)
+{
+    WIN32_FIND_DATA findData ;
+    HANDLE hFind ;
+    char searchPath[MAX_PATH] ;
+    char fullPath[MAX_PATH] ;
+    FILETIME newTime ;
+    SYSTEMTIME st ;
+    
+    /*
+     * Get current system time once for all files
+     */
+    GetSystemTime(&st) ;
+    SystemTimeToFileTime(&st, &newTime) ;
+    
+    /*
+     * First, process all files matching the pattern
+     */
+    sprintf_s(searchPath, sizeof(searchPath), "%s\\%s", path, pattern) ;
+    
+    hFind = FindFirstFile(searchPath, &findData) ;
+    
+    if (hFind != INVALID_HANDLE_VALUE)
+    {
+        do
+        {
+            sprintf_s(fullPath, sizeof(fullPath), "%s\\%s", path, findData.cFileName) ;
+            
+            /*
+             * Touch files
+             */
+            if (!(findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+            {
+                TouchFile(fullPath, verbose, &newTime) ;
+            }
+            /*
+             * Touch folders if -f flag is set
+             */
+            else if (touchFolders && strcmp(findData.cFileName, ".") != 0 && strcmp(findData.cFileName, "..") != 0)
+            {
+                TouchFolder(fullPath, verbose, &newTime) ;
+            }
+        }
+        while (FindNextFile(hFind, &findData)) ;
+        
+        FindClose(hFind) ;
+    }
+    
+    /*
+     * If recursing, process subdirectories
+     */
+    if (recurse)
+    {
+        sprintf_s(searchPath, sizeof(searchPath), "%s\\*", path) ;
+        hFind = FindFirstFile(searchPath, &findData) ;
+        
+        if (hFind != INVALID_HANDLE_VALUE)
+        {
+            do
+            {
+                /*
+                 * Process directories (but skip . and ..)
+                 */
+                if ((findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && strcmp(findData.cFileName, ".") != 0 && strcmp(findData.cFileName, "..") != 0)
+                {
+                    sprintf_s(fullPath, sizeof(fullPath), "%s\\%s", path, findData.cFileName) ;
+                    if (!verbose) printf("\nEntering directory: %s\n", fullPath) ;
+                    ProcessFilesInDirectory(fullPath, pattern, recurse, verbose, touchFolders) ;
+                }
+            }
+            while (FindNextFile(hFind, &findData)) ;
+            
+            FindClose(hFind) ;
+        }
+    }
+}
+
+/*
+ * FormatFileTime - Convert FILETIME to readable string
+ */
+void FormatFileTime(const FILETIME * ft, char * buffer, int bufferSize)
+{
+    SYSTEMTIME st ;
+    FILETIME localFt ;
+    
+    /*
+     * Convert to local time
+     */
+    FileTimeToLocalFileTime(ft, &localFt) ;
+    FileTimeToSystemTime(&localFt, &st) ;
+    
+    /*
+     * Format as: YYYY-MM-DD HH:MM:SS
+     */
+    sprintf_s(buffer, bufferSize, "%04d-%02d-%02d %02d:%02d:%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond) ;
+}
+
+/*
+ * ShowUsage - Display usage information
+ */
+void ShowUsage()
+{
+    puts("Windows Touch Utility") ;
+    puts("Usage:") ;
+    puts("  touch [options] [filespec]") ;
+    puts("") ;
+    puts("Options:") ;
+    puts("  -r     Recursively process subdirectories") ;
+    puts("  -v     Verbose mode (show old/new timestamps)") ;
+    puts("  -f     Touch folders as well as files") ;
+    puts("") ;
+    puts("Examples:") ;
+    puts("  touch *.exe          - Touch all .exe files in current directory") ;
+    puts("  touch -r *.txt       - Touch all .txt files recursively") ;
+    puts("  touch -v readme.md   - Touch file with verbose output") ;
+    puts("  touch -f *           - Touch all files and folders in current directory") ;
+    puts("  touch -r -f          - Touch all files and folders recursively") ;
+    puts("  touch -r -v -f *.log - Touch all .log files and folders recursively (verbose)") ;
+}
