@@ -368,4 +368,6 @@ void ShowUsage()
     puts("  touch -f *           - Touch all files and folders in current directory") ;
     puts("  touch -r -f          - Touch all files and folders recursively") ;
     puts("  touch -r -v -f *.log - Touch all .log files and folders recursively (verbose)") ;
+    puts("  \n  Written by Peet Morris.");
+
 }
